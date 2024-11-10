@@ -281,7 +281,7 @@ def main():
     try:
         # Initialize analyzer with path to dataset
         base_path = Path('NISTSpecialDatabase4GrayScaleImagesofFIGS/sd04/png_txt')
-        analyzer = EnhancedDotIslandAnalyzer(base_path)
+        analyzer = DotIslandAnalyzer(base_path)
         
         # Run analysis on test set (last 500 pairs)
         far_stats, frr_stats, eer, eer_threshold = analyzer.run_analysis()
