@@ -6,6 +6,8 @@ from skimage.morphology import skeletonize
 import matplotlib.pyplot as plt
 from typing import Tuple, List
 import os
+import pandas as pd
+from tqdm import tqdm
 
 class BifurcationAnalyzer:
     def __init__(self, dataset_path: str):
@@ -22,19 +24,6 @@ class BifurcationAnalyzer:
         """Verify and print the dataset structure"""
         if not self.dataset_path.exists():
             raise FileNotFoundError(f"Dataset path does not exist: {self.dataset_path}")
-        
-        # Print folder structure for debugging
-        print("Dataset structure:")
-        for root, dirs, files in os.walk(self.dataset_path):
-            level = root.replace(str(self.dataset_path), '').count(os.sep)
-            indent = ' ' * 4 * level
-            print(f"{indent}{os.path.basename(root)}/")
-            if level == 0:  # Only print files at root level
-                subindent = ' ' * 4 * (level + 1)
-                for f in files[:5]:  # Print first 5 files as example
-                    print(f"{subindent}{f}")
-                if len(files) > 5:
-                    print(f"{subindent}...")
 
     def find_image_file(self, image_name: str) -> Path:
         """
@@ -56,7 +45,6 @@ class BifurcationAnalyzer:
         try:
             # Find the full path to the image
             img_path = self.find_image_file(image_base_name)
-            print(f"Loading image from: {img_path}")
             
             # Load image
             img = io.imread(str(img_path), as_gray=True)
@@ -147,29 +135,178 @@ class BifurcationAnalyzer:
         plt.axis('off')
         plt.show()
 
-# Example usage
+    def make_match_decision(self, similarity_score):
+        """
+        Make a match/no-match decision based on the similarity score
+        """
+        THRESHOLD = 0.6  # Balanced threshold
+        return {
+            'match': similarity_score >= THRESHOLD,
+            'confidence': abs(similarity_score - 0.5) * 2,  # 0 to 1 scale
+            'score': similarity_score
+        }
+
 if __name__ == "__main__":
-    # Replace with your actual dataset path
     dataset_path = r"C:\Users\GCCISAdmin\Downloads\group1-biometrics\NISTSpecialDatabase4GrayScaleImagesofFIGS"
     analyzer = BifurcationAnalyzer(dataset_path)
     
-    try:
-        # Load and compare a pair of fingerprints
-        # Use just the base name of the file (without extension)
-        img1 = analyzer.load_image("f0002")
-        img2 = analyzer.load_image("s0002")
+    # Create lists to store results
+    genuine_results = []
+    impostor_results = []
+    
+    # Process genuine pairs (1-1500)
+    print("Processing genuine pairs (1-1500)...")
+    for i in tqdm(range(1, 1501), desc="Processing genuine pairs"):
+        try:
+            f_name = f"f{i:04d}"
+            s_name = f"s{i:04d}"
+            
+            img1 = analyzer.load_image(f_name)
+            img2 = analyzer.load_image(s_name)
+            
+            skeleton1, points1 = analyzer.extract_bifurcation_features(img1)
+            skeleton2, points2 = analyzer.extract_bifurcation_features(img2)
+            
+            similarity = analyzer.compare_fingerprints(points1, points2)
+            
+            genuine_results.append({
+                'pair_id': i,
+                'f_image': f_name,
+                's_image': s_name,
+                'similarity_score': similarity,
+                'pair_type': 'genuine'
+            })
+            
+        except Exception as e:
+            print(f"\nError processing genuine pair {i}: {str(e)}")
+    
+    # Process impostor pairs (1501-2000 with random matches)
+    print("\nProcessing impostor pairs (1501-2000)...")
+    np.random.seed(42)  # For reproducibility
+    
+    for i in tqdm(range(1501, 2001), desc="Processing impostor pairs"):
+        try:
+            f_name = f"f{i:04d}"
+            
+            # Choose a random s_image from 1-2000, but not the matching one
+            while True:
+                random_s = np.random.randint(1, 2001)
+                if random_s != i:  # Ensure we don't accidentally pick the matching pair
+                    break
+                    
+            s_name = f"s{random_s:04d}"
+            
+            img1 = analyzer.load_image(f_name)
+            img2 = analyzer.load_image(s_name)
+            
+            skeleton1, points1 = analyzer.extract_bifurcation_features(img1)
+            skeleton2, points2 = analyzer.extract_bifurcation_features(img2)
+            
+            similarity = analyzer.compare_fingerprints(points1, points2)
+            
+            impostor_results.append({
+                'pair_id': i,
+                'f_image': f_name,
+                's_image': s_name,
+                'similarity_score': similarity,
+                'pair_type': 'impostor'
+            })
+            
+        except Exception as e:
+            print(f"\nError processing impostor pair {i}: {str(e)}")
+    
+    # Combine results and save to CSV
+    all_results = genuine_results + impostor_results
+    df_results = pd.DataFrame(all_results)
+    output_dir = Path(r"C:\Users\GCCISAdmin\Downloads\group1-biometrics\data")
+    df_results.to_csv(output_dir / 'fingerprint_analysis_results.csv', index=False)
+    print("\nResults saved to 'fingerprint_analysis_results.csv'")
+    
+    # Calculate error rates
+    genuine_scores = df_results[df_results['pair_type'] == 'genuine']['similarity_score'].dropna().values
+    impostor_scores = df_results[df_results['pair_type'] == 'impostor']['similarity_score'].dropna().values
+    
+    thresholds = np.linspace(0, 1.2, 1000)
+    fars = []
+    frrs = []
+    
+    for threshold in thresholds:
+        # FRR: proportion of genuine pairs incorrectly rejected
+        frr = np.mean(genuine_scores < threshold)
+        # FAR: proportion of impostor pairs incorrectly accepted
+        far = np.mean(impostor_scores >= threshold)
         
-        # Extract features
-        skeleton1, points1 = analyzer.extract_bifurcation_features(img1)
-        skeleton2, points2 = analyzer.extract_bifurcation_features(img2)
-        
-        # Compare fingerprints
-        similarity = analyzer.compare_fingerprints(points1, points2)
-        print(f"Similarity score: {similarity:.3f}")
-        
-        # Visualize results
-        analyzer.visualize_results(skeleton1, points1, "First Fingerprint")
-        analyzer.visualize_results(skeleton2, points2, "Second Fingerprint")
-        
-    except Exception as e:
-        print(f"Error during processing: {str(e)}")
+        fars.append(far)
+        frrs.append(frr)
+    
+    fars = np.array(fars)
+    frrs = np.array(frrs)
+    
+    # Find EER
+    eer_idx = np.argmin(np.abs(fars - frrs))
+    eer = (fars[eer_idx] + frrs[eer_idx]) / 2
+    eer_threshold = thresholds[eer_idx]
+    
+    # Print results
+    print("\nError Rate Analysis:")
+    print("-" * 50)
+    print("\nFalse Accept Rate (FAR):")
+    print(f"  Minimum: {np.min(fars):.3%}")
+    print(f"  Maximum: {np.max(fars):.3%}")
+    print(f"  Average: {np.mean(fars):.3%}")
+    print("\nFalse Reject Rate (FRR):")
+    print(f"  Minimum: {np.min(frrs):.3%}")
+    print(f"  Maximum: {np.max(frrs):.3%}")
+    print(f"  Average: {np.mean(frrs):.3%}")
+    print("\nEqual Error Rate (EER):")
+    print(f"  EER: {eer:.3%}")
+    print(f"  at threshold: {eer_threshold:.3f}")
+    
+    # Additional statistics
+    print("\nMatching Statistics:")
+    print("-" * 50)
+    print("Genuine Pairs:")
+    print(f"  Average Score: {np.mean(genuine_scores):.3f}")
+    print(f"  Min Score: {np.min(genuine_scores):.3f}")
+    print(f"  Max Score: {np.max(genuine_scores):.3f}")
+    print("\nImpostor Pairs:")
+    print(f"  Average Score: {np.mean(impostor_scores):.3f}")
+    print(f"  Min Score: {np.min(impostor_scores):.3f}")
+    print(f"  Max Score: {np.max(impostor_scores):.3f}")
+    
+    # Plot distributions and error rates
+    plt.figure(figsize=(15, 5))
+    
+    # Plot score distributions
+    plt.subplot(121)
+    plt.hist(genuine_scores, bins=50, alpha=0.5, label='Genuine Pairs', density=True)
+    plt.hist(impostor_scores, bins=50, alpha=0.5, label='Impostor Pairs', density=True)
+    plt.xlabel('Similarity Score')
+    plt.ylabel('Density')
+    plt.title('Score Distributions')
+    plt.legend()
+    
+    # Plot FAR vs FRR
+    plt.subplot(122)
+    plt.plot(thresholds, fars, label='FAR')
+    plt.plot(thresholds, frrs, label='FRR')
+    plt.axvline(x=eer_threshold, color='r', linestyle='--', 
+               label=f'EER Threshold = {eer_threshold:.3f}')
+    plt.axhline(y=eer, color='r', linestyle='--', 
+               label=f'EER = {eer:.3%}')
+    plt.xlabel('Threshold')
+    plt.ylabel('Error Rate')
+    plt.title('FAR vs FRR Curves')
+    plt.legend()
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'error_rates.png')
+    plt.show()
+    
+    # Create a row for your methods table
+    print("\nMethods Table Row:")
+    print("-" * 50)
+    print("| Method | FRR avg | FRR min | FRR max | FAR avg | FAR min | FAR max | EER |")
+    print("|---------|----------|----------|----------|----------|----------|----------|-----|")
+    print(f"|Bifurcation|{np.mean(frrs):.3%}|{np.min(frrs):.3%}|{np.max(frrs):.3%}|{np.mean(fars):.3%}|{np.min(fars):.3%}|{np.max(fars):.3%}|{eer:.3%}|")
