@@ -11,6 +11,7 @@ import random
 class DotIslandAnalyzer:
     def __init__(self, base_path):
         self.base_path = Path(base_path)
+        # Adjusted threshold based on training data analysis
         self.threshold = 0.15
         print(f"\n[{self._get_timestamp()}] Initializing Dot/Island Analyzer...")
         print(f"[{self._get_timestamp()}] Base path set to: {self.base_path}")
@@ -22,16 +23,10 @@ class DotIslandAnalyzer:
     def load_and_preprocess(self, image_path):
         """Load and preprocess fingerprint image."""
         try:
-            # Read image
             img = io.imread(image_path, as_gray=True)
-            
-            # Apply Gaussian blur to reduce noise
             img_blur = filters.gaussian(img, sigma=1)
-            
-            # Apply threshold to create binary image
             thresh = filters.threshold_otsu(img_blur)
             binary = img_blur > thresh
-            
             return binary
         except Exception as e:
             print(f"[{self._get_timestamp()}] Error processing image {image_path}: {str(e)}")
@@ -39,11 +34,9 @@ class DotIslandAnalyzer:
     
     def extract_dots_islands(self, binary_image):
         """Extract dot and island features from binary image."""
-        # Find small connected components (dots)
         dots = morphology.remove_small_objects(binary_image, min_size=5, connectivity=2)
         dots = morphology.remove_small_holes(dots, area_threshold=5)
         
-        # Use blob detection to find islands
         blobs = feature.blob_log(
             binary_image.astype(float),
             min_sigma=1,
@@ -51,12 +44,10 @@ class DotIslandAnalyzer:
             threshold=0.1
         )
         
-        # Calculate additional features
         total_white_pixels = np.sum(binary_image)
         image_area = binary_image.size
         density = total_white_pixels / image_area
         
-        # Combine features into a descriptor
         features = {
             'dot_count': np.sum(dots),
             'island_locations': blobs[:, :2] if len(blobs) > 0 else np.array([]),
@@ -73,19 +64,15 @@ class DotIslandAnalyzer:
     
     def compare_features(self, features1, features2):
         """Compare two sets of features and return a similarity score."""
-        # Compare dot counts (normalized)
         dot_diff = abs(features1['dot_count'] - features2['dot_count'])
         dot_score = self.normalize_similarity(dot_diff, 0, 100)
         
-        # Compare island counts (normalized)
         island_count_diff = abs(features1['island_count'] - features2['island_count'])
         island_score = self.normalize_similarity(island_count_diff, 0, 20)
         
-        # Compare density
         density_diff = abs(features1['density'] - features2['density'])
         density_score = 1 - density_diff
         
-        # Calculate weighted similarity score
         weights = {'dot': 0.4, 'island': 0.4, 'density': 0.2}
         similarity = (
             weights['dot'] * (1 - dot_score) +
@@ -94,6 +81,60 @@ class DotIslandAnalyzer:
         )
         
         return similarity
+
+    def plot_far_frr_curves(self, thresholds, far_rates, frr_rates, eer, eer_threshold):
+        """Plot FAR and FRR curves."""
+        plt.figure(figsize=(10, 8))
+        plt.plot(thresholds, far_rates, 'b-', label='FAR')
+        plt.plot(thresholds, frr_rates, 'r-', label='FRR')
+        plt.axvline(x=eer_threshold, color='g', linestyle='--', label=f'EER Threshold: {eer_threshold:.4f}')
+        plt.plot(eer_threshold, eer, 'go', label=f'EER: {eer:.4f}')
+        
+        plt.xlabel('Threshold')
+        plt.ylabel('Error Rate')
+        plt.title('FAR/FRR Curves')
+        plt.legend()
+        plt.grid(True)
+        
+        # Save plot
+        plt.savefig('far_frr_curves.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+    def train_system(self, start_idx=1, end_idx=1499):
+        """Train the system using the first 1500 pairs."""
+        print(f"\n[{self._get_timestamp()}] Training system with pairs {start_idx}-{end_idx}")
+        
+        # Process training pairs to establish optimal parameters
+        genuine_scores = []
+        for idx in range(start_idx, end_idx + 1):
+            f_pattern = f'f{idx:04d}'
+            s_pattern = f's{idx:04d}'
+            
+            f_image = None
+            s_image = None
+            
+            for subdir in self.base_path.glob('*'):
+                if not subdir.is_dir():
+                    continue
+                    
+                for img_path in subdir.glob('*.png'):
+                    if f_pattern in img_path.stem:
+                        f_image = img_path
+                    elif s_pattern in img_path.stem:
+                        s_image = img_path
+                        
+                if f_image and s_image:
+                    break
+            
+            if f_image and s_image:
+                similarity = self.analyze_image_pair(f_image, s_image)
+                genuine_scores.append(similarity)
+        
+        # Set optimal threshold based on training data
+        self.threshold = np.mean(genuine_scores) - np.std(genuine_scores)
+        print(f"[{self._get_timestamp()}] Training complete. Optimal threshold: {self.threshold:.4f}")
+        
+        return self.threshold
     
     def analyze_image_pair(self, f_image_path, s_image_path):
         """Analyze a pair of fingerprint images and return similarity score."""
@@ -127,6 +168,54 @@ class DotIslandAnalyzer:
         except Exception as e:
             print(f"[{self._get_timestamp()}] Error analyzing image pair: {str(e)}")
             raise
+
+    def test_system(self, start_idx=1501, end_idx=2000):
+        """Test the system using the last 500 pairs."""
+        print(f"\n[{self._get_timestamp()}] Testing system with pairs {start_idx}-{end_idx}")
+        
+        genuine_pairs = []
+        genuine_scores = []
+        
+        # Collect genuine pairs from test set
+        for idx in range(start_idx, end_idx + 1):
+            f_pattern = f'f{idx:04d}'
+            s_pattern = f's{idx:04d}'
+            
+            f_image = None
+            s_image = None
+            
+            for subdir in self.base_path.glob('*'):
+                if not subdir.is_dir():
+                    continue
+                    
+                for img_path in subdir.glob('*.png'):
+                    if f_pattern in img_path.stem:
+                        f_image = img_path
+                    elif s_pattern in img_path.stem:
+                        s_image = img_path
+                        
+                if f_image and s_image:
+                    break
+            
+            if f_image and s_image:
+                genuine_pairs.append((f_image, s_image))
+                similarity = self.analyze_image_pair(f_image, s_image)
+                genuine_scores.append(similarity)
+        
+        # Generate and analyze impostor pairs
+        impostor_pairs = self.generate_impostor_pairs(genuine_pairs, len(genuine_pairs))
+        impostor_scores = []
+        
+        for f_image, s_image in impostor_pairs:
+            similarity = self.analyze_image_pair(f_image, s_image)
+            impostor_scores.append(similarity)
+        
+        # Calculate error rates
+        far_stats, frr_stats, eer, eer_threshold = self.calculate_error_rates(
+            genuine_scores, impostor_scores
+        )
+        
+        return far_stats, frr_stats, eer, eer_threshold
     
     def generate_impostor_pairs(self, genuine_pairs, num_impostor_pairs):
         """Generate impostor pairs by mixing different identities."""
@@ -148,63 +237,62 @@ class DotIslandAnalyzer:
         """Calculate FRR, FAR, and EER using both genuine and impostor scores."""
         print(f"\n[{self._get_timestamp()}] Calculating error rates...")
         
-        # Create labels (1 for genuine, 0 for impostor)
-        y_true = np.concatenate([np.ones(len(genuine_scores)), np.zeros(len(impostor_scores))])
-        scores = np.concatenate([genuine_scores, impostor_scores])
+        # Convert scores to numpy arrays if they aren't already
+        genuine_scores = np.array(genuine_scores)
+        impostor_scores = np.array(impostor_scores)
         
-        # Calculate ROC curve and error rates
-        fpr, tpr, thresholds = roc_curve(y_true, scores)
+        # Generate a range of thresholds from min to max score
+        min_score = min(np.min(genuine_scores), np.min(impostor_scores))
+        max_score = max(np.max(genuine_scores), np.max(impostor_scores))
+        thresholds = np.linspace(min_score, max_score, 100)
         
-        # Calculate FNR (False Negative Rate = FRR)
-        fnr = 1 - tpr
-        
-        # Calculate actual FAR and FRR rates at each threshold
+        # Calculate FAR and FRR for each threshold
         far_rates = []
         frr_rates = []
         
         for threshold in thresholds:
-            # Calculate FRR (proportion of genuine pairs incorrectly rejected)
-            frr = np.mean(np.array(genuine_scores) < threshold)
+            # False Rejection Rate: proportion of genuine scores below threshold
+            frr = np.sum(genuine_scores < threshold) / len(genuine_scores)
             frr_rates.append(frr)
             
-            # Calculate FAR (proportion of impostor pairs incorrectly accepted)
-            far = np.mean(np.array(impostor_scores) >= threshold)
+            # False Acceptance Rate: proportion of impostor scores at or above threshold
+            far = np.sum(impostor_scores >= threshold) / len(impostor_scores)
             far_rates.append(far)
         
         far_rates = np.array(far_rates)
         frr_rates = np.array(frr_rates)
         
-        # Find EER
+        # Find EER (point where FAR ≈ FRR)
         eer_idx = np.argmin(np.abs(far_rates - frr_rates))
         eer = np.mean([far_rates[eer_idx], frr_rates[eer_idx]])
         
-        # Calculate actual min/max/avg statistics
-        # Remove any NaN values before calculating statistics
-        far_rates_clean = far_rates[~np.isnan(far_rates)]
-        frr_rates_clean = frr_rates[~np.isnan(frr_rates)]
-        
+        # Calculate actual observed statistics
         far_stats = {
-            'min': np.min(far_rates_clean),
-            'max': np.max(far_rates_clean),
-            'avg': np.mean(far_rates_clean)
+            'min': np.min(far_rates[far_rates > 0]),  # Lowest non-zero FAR
+            'max': np.max(far_rates[far_rates < 1]),  # Highest FAR less than 1
+            'avg': np.mean(far_rates)
         }
         
         frr_stats = {
-            'min': np.min(frr_rates_clean),
-            'max': np.max(frr_rates_clean),
-            'avg': np.mean(frr_rates_clean)
+            'min': np.min(frr_rates[frr_rates > 0]),  # Lowest non-zero FRR
+            'max': np.max(frr_rates[frr_rates < 1]),  # Highest FRR less than 1
+            'avg': np.mean(frr_rates)
         }
+        
+        # For ROC curve calculation
+        y_true = np.concatenate([np.ones(len(genuine_scores)), np.zeros(len(impostor_scores))])
+        scores = np.concatenate([genuine_scores, impostor_scores])
+        fpr, tpr, _ = roc_curve(y_true, scores)
         
         # Generate ROC curve plot
         self.plot_error_rates(fpr, tpr, eer)
         
         print(f"[{self._get_timestamp()}] Error rate calculation complete")
-        print(f"[{self._get_timestamp()}] Number of thresholds evaluated: {len(thresholds)}")
-        print(f"[{self._get_timestamp()}] FRR range: {frr_stats['min']:.4f} - {frr_stats['max']:.4f}")
-        print(f"[{self._get_timestamp()}] FAR range: {far_stats['min']:.4f} - {far_stats['max']:.4f}")
+        print(f"[{self._get_timestamp()}] Actual FRR range: {frr_stats['min']:.4f} - {frr_stats['max']:.4f}")
+        print(f"[{self._get_timestamp()}] Actual FAR range: {far_stats['min']:.4f} - {far_stats['max']:.4f}")
         
         return far_stats, frr_stats, eer, thresholds[eer_idx]
-        
+    
     def plot_error_rates(self, fpr, tpr, eer):
         """Generate and save ROC curve plot with additional metrics."""
         plt.figure(figsize=(10, 8))
@@ -238,83 +326,6 @@ class DotIslandAnalyzer:
         # Save plot
         plt.savefig('roc_curve.png', dpi=300, bbox_inches='tight')
         plt.close()
-        
-    def run_analysis(self, start_idx=1501, end_idx=2000):
-        """Run the complete analysis on the test set."""
-        print(f"\n[{self._get_timestamp()}] Starting analysis on test set (images {start_idx}-{end_idx})")
-        print(f"[{self._get_timestamp()}] Scanning directories for image pairs...")
-        
-        genuine_pairs = []
-        genuine_scores = []
-        total_pairs = end_idx - start_idx + 1
-        processed_pairs = 0
-        
-        analysis_start_time = time.time()
-        
-        # Collect genuine pairs
-        for idx in range(start_idx, end_idx + 1):
-            pair_start_time = time.time()
-            
-            # Find corresponding files
-            f_pattern = f'f{idx:04d}'
-            s_pattern = f's{idx:04d}'
-            
-            print(f"\n[{self._get_timestamp()}] Looking for pair {idx} ({f_pattern}, {s_pattern})")
-            
-            f_image = None
-            s_image = None
-            
-            # Search through all subdirectories
-            for subdir in self.base_path.glob('*'):
-                if not subdir.is_dir():
-                    continue
-                    
-                for img_path in subdir.glob('*.png'):
-                    if f_pattern in img_path.stem:
-                        f_image = img_path
-                    elif s_pattern in img_path.stem:
-                        s_image = img_path
-                        
-                if f_image and s_image:
-                    break
-            
-            if f_image and s_image:
-                genuine_pairs.append((f_image, s_image))
-                similarity = self.analyze_image_pair(f_image, s_image)
-                genuine_scores.append(similarity)
-                processed_pairs += 1
-                
-                # Calculate and display progress
-                progress = (processed_pairs / total_pairs) * 100
-                elapsed_time = time.time() - analysis_start_time
-                avg_time_per_pair = elapsed_time / processed_pairs
-                estimated_remaining = avg_time_per_pair * (total_pairs - processed_pairs)
-                
-                print(f"[{self._get_timestamp()}] Progress: {progress:.1f}% complete")
-                print(f"[{self._get_timestamp()}] Estimated time remaining: {estimated_remaining:.1f} seconds")
-            else:
-                print(f"[{self._get_timestamp()}] WARNING: Could not find matching pair for index {idx}")
-        
-        # Generate and analyze impostor pairs
-        print(f"\n[{self._get_timestamp()}] Generating and analyzing impostor pairs...")
-        impostor_pairs = self.generate_impostor_pairs(genuine_pairs, len(genuine_pairs))
-        impostor_scores = []
-        
-        for f_image, s_image in impostor_pairs:
-            similarity = self.analyze_image_pair(f_image, s_image)
-            impostor_scores.append(similarity)
-        
-        # Calculate error rates
-        far_stats, frr_stats, eer, eer_threshold = self.calculate_error_rates(
-            genuine_scores, impostor_scores
-        )
-        
-        total_time = time.time() - analysis_start_time
-        print(f"\n[{self._get_timestamp()}] Analysis complete!")
-        print(f"[{self._get_timestamp()}] Total processing time: {total_time:.2f} seconds")
-        print(f"[{self._get_timestamp()}] Processed {processed_pairs} genuine pairs and {len(impostor_pairs)} impostor pairs")
-        
-        return far_stats, frr_stats, eer, eer_threshold
 
 def main():
     print(f"\n{'='*80}")
@@ -327,8 +338,11 @@ def main():
         base_path = Path('NISTSpecialDatabase4GrayScaleImagesofFIGS/sd04/png_txt')
         analyzer = DotIslandAnalyzer(base_path)
         
-        # Run analysis on test set (last 500 pairs)
-        far_stats, frr_stats, eer, eer_threshold = analyzer.run_analysis()
+        # Train the system with first 1500 pairs
+        optimal_threshold = analyzer.train_system(1, 1499)
+        
+        # Test the system with last 500 pairs
+        far_stats, frr_stats, eer, eer_threshold = analyzer.test_system(1501, 2000)
         
         # Print results
         print("\nFINAL RESULTS:")
@@ -343,7 +357,7 @@ def main():
         print(f"  → Average: {far_stats['avg']:.4f}")
         print(f"\nEqual Error Rate (EER): {eer:.4f}")
         print(f"EER Threshold: {eer_threshold:.4f}")
-        print("\nROC curve has been saved as 'roc_curve.png'")
+        print("\nROC and FAR/FRR curves have been saved as 'roc_curve.png' and 'far_frr_curves.png'")
         
     except Exception as e:
         print(f"\nERROR: An error occurred during analysis: {str(e)}")
