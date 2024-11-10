@@ -156,31 +156,72 @@ class DotIslandAnalyzer:
         # Calculate ROC curve and error rates
         fpr, tpr, thresholds = roc_curve(y_true, scores)
         
-        # Calculate EER
-        fnr = 1 - tpr  # False Negative Rate = 1 - True Positive Rate
-        eer_threshold_idx = np.nanargmin(np.absolute(fnr - fpr))
-        eer = np.mean([fpr[eer_threshold_idx], fnr[eer_threshold_idx]])
+        # Calculate FNR (False Negative Rate = FRR)
+        fnr = 1 - tpr
         
-        # Calculate stats
-        far_stats = {'min': np.min(fpr), 'max': np.max(fpr), 'avg': np.mean(fpr)}
-        frr_stats = {'min': np.min(fnr), 'max': np.max(fnr), 'avg': np.mean(fnr)}
+        # Calculate actual FAR and FRR rates at each threshold
+        far_rates = []
+        frr_rates = []
+        
+        for threshold in thresholds:
+            # Calculate FRR (proportion of genuine pairs incorrectly rejected)
+            frr = np.mean(np.array(genuine_scores) < threshold)
+            frr_rates.append(frr)
+            
+            # Calculate FAR (proportion of impostor pairs incorrectly accepted)
+            far = np.mean(np.array(impostor_scores) >= threshold)
+            far_rates.append(far)
+        
+        far_rates = np.array(far_rates)
+        frr_rates = np.array(frr_rates)
+        
+        # Find EER
+        eer_idx = np.argmin(np.abs(far_rates - frr_rates))
+        eer = np.mean([far_rates[eer_idx], frr_rates[eer_idx]])
+        
+        # Calculate actual min/max/avg statistics
+        # Remove any NaN values before calculating statistics
+        far_rates_clean = far_rates[~np.isnan(far_rates)]
+        frr_rates_clean = frr_rates[~np.isnan(frr_rates)]
+        
+        far_stats = {
+            'min': np.min(far_rates_clean),
+            'max': np.max(far_rates_clean),
+            'avg': np.mean(far_rates_clean)
+        }
+        
+        frr_stats = {
+            'min': np.min(frr_rates_clean),
+            'max': np.max(frr_rates_clean),
+            'avg': np.mean(frr_rates_clean)
+        }
         
         # Generate ROC curve plot
         self.plot_error_rates(fpr, tpr, eer)
         
         print(f"[{self._get_timestamp()}] Error rate calculation complete")
+        print(f"[{self._get_timestamp()}] Number of thresholds evaluated: {len(thresholds)}")
+        print(f"[{self._get_timestamp()}] FRR range: {frr_stats['min']:.4f} - {frr_stats['max']:.4f}")
+        print(f"[{self._get_timestamp()}] FAR range: {far_stats['min']:.4f} - {far_stats['max']:.4f}")
         
-        return far_stats, frr_stats, eer, thresholds[eer_threshold_idx]
-    
+        return far_stats, frr_stats, eer, thresholds[eer_idx]
+        
     def plot_error_rates(self, fpr, tpr, eer):
-        """Generate and save ROC curve plot."""
+        """Generate and save ROC curve plot with additional metrics."""
         plt.figure(figsize=(10, 8))
         
         # Plot ROC curve
-        plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC curve (EER = {eer:.4f})')
+        roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, color='blue', lw=2, 
+                label=f'ROC curve (AUC = {roc_auc:.4f}, EER = {eer:.4f})')
         
         # Plot diagonal line
         plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
+        
+        # Plot EER point
+        eer_point = np.argmin(np.abs(1 - tpr - fpr))
+        plt.plot(fpr[eer_point], tpr[eer_point], 'ro', 
+                label=f'EER Point ({eer:.4f})')
         
         # Add labels and title
         plt.xlabel('False Positive Rate (FAR)')
@@ -191,8 +232,12 @@ class DotIslandAnalyzer:
         # Add grid
         plt.grid(True, linestyle='--', alpha=0.7)
         
+        # Set axis limits
+        plt.xlim([-0.02, 1.02])
+        plt.ylim([-0.02, 1.02])
+        
         # Save plot
-        plt.savefig('roc_curve.png')
+        plt.savefig('roc_curve.png', dpi=300, bbox_inches='tight')
         plt.close()
         
     def run_analysis(self, start_idx=1501, end_idx=2000):
