@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
+import random
 
 class DotIslandAnalyzer:
     def __init__(self, base_path):
@@ -129,8 +130,6 @@ class DotIslandAnalyzer:
     
     def generate_impostor_pairs(self, genuine_pairs, num_impostor_pairs):
         """Generate impostor pairs by mixing different identities."""
-        import random
-        
         impostor_pairs = []
         all_f_images = [pair[0] for pair in genuine_pairs]
         all_s_images = [pair[1] for pair in genuine_pairs]
